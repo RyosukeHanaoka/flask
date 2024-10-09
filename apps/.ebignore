@@ -1,0 +1,27 @@
+# 仮想環境関連（venvなど）
+venv/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+*.whl
+*.egg-info/
+
+# 大きなファイル（モデルファイルなど）
+data/checkpoint.pth
+data/model.pth
+
+# ログファイルなど
+*.log
+
+# S3や外部ストレージで管理する静的ファイル（画像・CSS）
+data/pictures/
+auth/static/
+data/static/
+edit/edit_static/
+
+# 一時ファイルや設定ファイル
+.DS_Store
+*.swp
+*.swo
+

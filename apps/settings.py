@@ -10,9 +10,23 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # セキュリティ強化のためのシークレットキー
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'your-secret-key-for-development' """os.urandom(24)"""
+    SECRET_KEY = os.environ.get('SECRET_KEY') 
 
     # 管理者のユーザー名とパスワードを設定
-    USERNAME = os.environ.get('ADMIN_USERNAME') 
-    PASSWORD = os.environ.get('ADMIN_PASSWORD') 
-    UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/pictures')
+    USERNAME = os.environ.get('USERNAME') 
+    PASSWORD = os.environ.get('PASSWORD') 
+
+    # メールサーバーの設定
+    MAIL_SERVER = os.environ.get('MAIL_SERVER') 
+    MAIL_PORT = 587
+    MAIL_USE_TLS = True
+    MAIL_USERNAME = os.environ.get('MAIL_USERNAME')  
+    MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')  
+    MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') 
+
+    # aws s3の設定
+    S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
+    S3_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
+    S3_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    S3_LOCATION = f"http://{S3_BUCKET}.s3.amazonaws.com/"
+

@@ -3,12 +3,17 @@ from flask_login import login_required, current_user
 from .extensions import db
 from sqlalchemy import func
 import datetime
+import requests  # 自宅PCにHTTPリクエストを送信するために必要
+import boto3  # S3へのアップロードに使用
 import os
+from apps.settings import Config
+from apps.app import app  # Import the Flask app instance
 from .models import HandPicData, RightHandData, LeftHandData, LargeJointData, FootJointData
 from .models import Symptom, LabData, ScoreData
 from .vit import Vit
-vit=Vit(model_checkpoint='/Users/hanaokaryousuke/flask/apps/data/model.pth')
+#vit=Vit(model_checkpoint='/Users/hanaokaryousuke/flask/apps/data/model.pth')
 data_blueprint = Blueprint('data_blueprint', __name__, template_folder='templates', static_folder='static')
+
 
 @data_blueprint.route('/index', methods=['GET', 'POST'])
 def index():
@@ -288,72 +293,98 @@ def labo_defect():
     error_message = request.args.get('error_message', 'エラーが発生しました。')
     return render_template('labo_defect.html', error_message=error_message)
 
+# 自宅PCのサーバーのURL
+PREDICTION_SERVER_URL = 'http://58.90.145.44:51015/predict'
+
+# S3クライアントの作成
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=app.config['AWS_ACCESS_KEY_ID'],
+    aws_secret_access_key=app.config['AWS_SECRET_ACCESS_KEY']
+)
+
+# 画像をS3にアップロードする関数
+def upload_file_to_s3(file, filename, acl="public-read"):
+    try:
+        s3.upload_fileobj(
+            file,
+            app.config['S3_BUCKET_NAME'],
+            filename,
+            ExtraArgs={
+                "ACL": acl,
+                "ContentType": file.content_type
+            }
+        )
+        return f"http://{app.config['S3_BUCKET_NAME']}.s3.amazonaws.com/{filename}"
+
+    except Exception as e:
+        print("S3へのアップロードエラー:", e)
+        return None
+
+
 @data_blueprint.route('/handpicture', methods=['GET', 'POST'])
 @login_required
 def handpicture():
     if request.method == 'POST':
         pt_id = session.get('pt_id')
-        #フォームから送信されたファイルのうち、right_handという名前のファイルを取得
+
+        # フォームから送信されたファイルの取得
         right_hand = request.files.get('right_hand')
-        #フォームから送信されたファイルのうち、left_handという名前のファイルを取得
         left_hand = request.files.get('left_hand')
-        #右手または左手のファイルが送信されていない場合にTrueとなる条件式
         if not right_hand or not left_hand:
-            #HTTP 400エラーを返し、エラーメッセージを提供
             abort(400, description="Missing 'right_hand' or 'left_hand' file in request")
-        #現在の日時を取得
+
         now = datetime.datetime.now()
-        
-        #日時を文字列に変換
         dt_string = now.strftime("%Y%m%d_%H%M%S")
-        #ユーザーのメールアドレスと日時を組み合わせてファイル名を生成
         right_filename = f"{current_user.email}_{dt_string}_right.jpg"
         left_filename = f"{current_user.email}_{dt_string}_left.jpg"
 
-        # 画像を保存するディレクトリ
-        right_dir = "data/pictures/image_righthand"
-        left_dir = "data/pictures/image_lefthand"
+        # S3にアップロード
+        right_file_url = upload_file_to_s3(right_hand, right_filename)
+        left_file_url = upload_file_to_s3(left_hand, left_filename)
 
-        # ディレクトリが存在しない場合は作成
-        os.makedirs(right_dir, exist_ok=True)
-        os.makedirs(left_dir, exist_ok=True)
+        if not right_file_url or not left_file_url:
+            flash('S3へのアップロードに失敗しました。', 'danger')
+            return redirect(url_for('data_blueprint.handpicture'))
 
-        # 保存するファイルのパス
-        right_path = os.path.join(right_dir, right_filename)
-        left_path = os.path.join(left_dir, left_filename)
+        # 自宅PCのサーバーにPOSTリクエストでS3にアップロードされた画像のURLを送信
+        files = {
+            'right_hand_url': right_file_url,
+            'left_hand_url': left_file_url
+        }
 
-        # ファイルを保存
-        right_hand.save(right_path)
-        left_hand.save(left_path)
+        try:
+            response = requests.post(PREDICTION_SERVER_URL, json=files)
+            response.raise_for_status()  # エラーがあれば例外を発生させる
+        except requests.exceptions.RequestException as e:
+            flash(f'Prediction server error: {e}', 'danger')
+            return redirect(url_for('data_blueprint.handpicture'))
 
-        #モデル（ここではvit）を使ってリウマチ関節炎の検出を行い、その結果を取得
-        right_hand_result, left_hand_result, result = vit.detect_rheumatoid_arthritis(right_path, left_path)
+        # 自宅PCからの推論結果を取得
+        results = response.json()
+        right_hand_result = results.get('right_hand_result')
+        left_hand_result = results.get('left_hand_result')
+        result = results.get('result')
 
-        #右手と左手の画像のパス、現在のユーザーID、日時を含む新しいHandDataオブジェクトを作成
+        # データベースに保存
         hand_data = HandPicData(
             user_id=current_user.id,
-            pt_id = pt_id,
-            visit_number = session.get('visit_number'),
+            pt_id=pt_id,
+            visit_number=session.get('visit_number'),
             datetime=now,
-            right_hand_path=right_path,
-            left_hand_path=left_path,
-            right_hand_result=right_hand_result,  # 右手の結果
-            left_hand_result=left_hand_result,  # 左手の結果
-            result=result  # 全体の結果
+            right_hand_path=right_file_url,
+            left_hand_path=left_file_url,
+            right_hand_result=right_hand_result,
+            left_hand_result=left_hand_result,
+            result=result
         )
-        #データベースセッションに新しいHandDataオブジェクトを追加
         db.session.add(hand_data)
-        #データベースに変更をコミット（保存）
         db.session.commit()
 
-        #検出結果をセッションに保存
         session['result'] = result
-        #/ptresultエンドポイントにリダイレクト
-        #return redirect(url_for('data_blueprint.ptresult'))
         return redirect(url_for('data_blueprint.scoring'))
-    #GETリクエストが送信された場合、handpicture.htmlテンプレートをレンダリングして返す
-    return render_template('handpicture.html')
 
+    return render_template('handpicture.html')
 
 @data_blueprint.route('/ptresult', methods=['GET', 'POST'])
 @login_required
@@ -533,5 +564,4 @@ def scoring():
 @login_required
 def finished():
     return render_template('finished.html')
-    
      
